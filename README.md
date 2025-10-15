@@ -1,4 +1,4 @@
-# phoenix4all
+# Phoenix4All - The Phoenix library for the lazy astronomer
 
 [![Release](https://img.shields.io/github/v/release/ahmed-f-alrefaie/phoenix4all)](https://img.shields.io/github/v/release/ahmed-f-alrefaie/phoenix4all)
 [![Build status](https://img.shields.io/github/actions/workflow/status/ahmed-f-alrefaie/phoenix4all/main.yml?branch=main)](https://github.com/ahmed-f-alrefaie/phoenix4all/actions/workflows/main.yml?query=branch%3Amain)
@@ -11,64 +11,104 @@ All in one library for loading and using phoenix spectra
 - **Github repository**: <https://github.com/ahmed-f-alrefaie/phoenix4all/>
 - **Documentation** <https://ahmed-f-alrefaie.github.io/phoenix4all/>
 
-## Getting started with your project
 
-### 1. Create a New Repository
+## What is it?
 
-First, create a repository on GitHub with the same name as this project, and then run the following commands:
+Phoenix4All is a Python library that provides an easy-to-use interface for accessing and utilizing the PHOENIX stellar atmosphere models and synthetic spectra. It attempts to solve the infuriatingly complex process of downloading, managing, and interpolating PHOENIX models by providing a simple and efficient API that does it for you. It has been especially designed for astronomers and astrophysicists who need to work with stellar spectra in their research. But its really designed to make your life easier if you need to use PHOENIX models.
 
-```bash
-git init -b main
-git add .
-git commit -m "init commit"
-git remote add origin git@github.com:ahmed-f-alrefaie/phoenix4all.git
-git push -u origin main
-```
+## Features
 
-### 2. Set Up Your Development Environment
+- **Lazy loading**: Download and cache models on-the-fly as needed.
+- **Downloader**: A downloader to grab the models if you want to manage them yourself.
+- **Interpolation**: Linearly interpolate between models to get spectra for arbitrary stellar parameters.
+- **Multiple sources**: Support for different PHOENIX model sources, including high-resolution FITS files and lower-resolution ASCII files.
+- **Minimal memory usage**: Only needed spectral files are downloaded then loaded into memory.
+- **Command-line interface**: A CLI tool to quickly fetch and manage models from the terminal.
 
-Then, install the environment and the pre-commit hooks with
 
-```bash
-make install
-```
-
-This will also generate your `uv.lock` file
-
-### 3. Run the pre-commit hooks
-
-Initially, the CI/CD pipeline might be failing due to formatting issues. To resolve those run:
+## Installation
+You can install Phoenix4All using pip:
 
 ```bash
-uv run pre-commit run -a
+pip install phoenix4all
 ```
 
-### 4. Commit the changes
+## Usage
+Here's a simple example of how to use Phoenix4All to fetch and interpolate a PHOENIX model:
 
-Lastly, commit the changes made by the two steps above to your repository.
+```python
+from phoenix4all import get_spectrum
+
+wavelength, flux = get_spectrum(
+    teff=5778,  # Effective temperature in Kelvin
+    logg=4.44,  # Surface gravity in cgs
+    feh=0.0,    # Metallicity [Fe/H]
+    alpha=0.0,  # Alpha element enhancement [alpha/Fe] if you're too cool for school.
+    source='synphot',  # Source of the models
+)
+
+print(wavelength, flux)
+```
+
+That's it! Phoenix4All will handle the rest, downloading and caching the necessary models, and interpolating to get the desired spectrum.
+Now if you have already downloaded the models, you can specify the directory where they are stored:
+
+```python
+from phoenix4all import get_spectrum
+wavelength, flux = get_spectrum(
+    teff=5778,
+    logg=4.44,
+    feh=0.0,
+    alpha=0.0,
+    source='synphot',
+    path='/path/to/your/phoenix/models'  # Specify your local directory
+)
+print(wavelength, flux)
+```
+
+## Being less lazy
+
+You can work directly with the sources if you want more control:
+
+```python
+from phoenix4all import SynphotSource
+
+source = SynphotSource(path='/path/to/your/phoenix/models')
+spectrum = source.spectrum(teff=5778, logg=4.44, feh=0.0, alpha=0.0)
+wavelength, flux = spectrum
+print(wavelength, flux)
+```
+
+Its faster since theres less overhead in figuring out which files are available.
+
+## Downloading 
+
+Ohhhh fancy! You can also use the command-line interface to fetch a model:
 
 ```bash
-git add .
-git commit -m 'Fix formatting issues'
-git push origin main
+python -m phoenix4all.downloader /path/to/store synphot --teff-range 5000 6000 --logg-range 0 2 --feh 0.0 --alpha 0.0
 ```
 
-You are now ready to start development on your project!
-The CI/CD pipeline will be triggered when you open a pull request, merge to main, or when you create a new release.
+This will download all models with effective temperatures between 5000K and 6000K, surface gravities between 0 and 2, metallicity [Fe/H] of 0.0, and alpha element enhancement [alpha/Fe] of 0.0 from the synphot source.
 
-To finalize the set-up for publishing to PyPI, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/publishing/#set-up-for-pypi).
-For activating the automatic documentation with MkDocs, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/mkdocs/#enabling-the-documentation-on-github).
-To enable the code coverage reports, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/codecov/).
+## Supported Sources
 
-## Releasing a new version
+Right now, Phoenix4All supports the following PHOENIX model sources:
 
-- Create an API Token on [PyPI](https://pypi.org/).
-- Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/ahmed-f-alrefaie/phoenix4all/settings/secrets/actions/new).
-- Create a [new release](https://github.com/ahmed-f-alrefaie/phoenix4all/releases/new) on Github.
-- Create a new tag in the form `*.*.*`.
+- **HiResFITS**: High-resolution FITS files from the [PHOENIX project](https://phoenix.astro.physik.uni-goettingen.de/data/v2.0/HiResFITS/).
+- **Synphot**: FITS files from [STSCI](https://archive.stsci.edu/hlsps/reference-atlases/cdbs/grid/phoenix/)
 
-For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
 
----
+## TODO
 
-Repository initiated with [fpgmaas/cookiecutter-uv](https://github.com/fpgmaas/cookiecutter-uv).
+- Add support for more sources (e.g., BT-Settl, NextGen).
+- Make an auto guessing function to figure out which source to use based on available files.
+
+## Contributing
+
+For the love of God, please do. Open an issue or a pull request on GitHub. Really just adding more sources would be amazing.
+
+## License 
+
+Phoenix4All is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+
