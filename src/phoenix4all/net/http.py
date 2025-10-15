@@ -9,6 +9,10 @@ import urllib.parse
 
 import bs4
 
+from phoenix4all.log import module_logger
+
+_log = module_logger(__name__)
+
 RE_ISO8601 = re.compile(r"\d{4}-\d+-\d+T\d+:\d{2}:\d{2}Z")
 DATETIME_FMTs = (
     (re.compile(r"\d+-[A-S][a-y]{2}-\d{4} \d+:\d{2}:\d{2}"), "%d-%b-%Y %H:%M:%S"),
@@ -34,6 +38,15 @@ RE_HEAD_MOD = re.compile("modifi|^uploaded|date|time")
 RE_HEAD_SIZE = re.compile("size|bytes$")
 
 FileEntry = collections.namedtuple("FileEntry", "name modified size description")
+
+
+class FetchListingError(Exception):
+    pass
+
+
+class ColumnDetectionError(Exception):
+    def __init__(self):
+        super().__init__("Unable to detect table columns number in the directory listing.")
 
 
 def human2bytes(s):
@@ -62,7 +75,7 @@ def aherf2filename(a_href):
     return os.path.basename(urllib.parse.unquote(a_href.rstrip("/"))) + isdir
 
 
-def parse(soup):
+def parse(soup):  # noqa: C901
     """
     Try to parse apache/nginx-style directory listing with all kinds of tricks.
 
@@ -115,10 +128,7 @@ def parse(soup):
                 match = RE_FILESIZE.match(line)
                 if match:
                     sizestr = match.group(0)
-                    if sizestr == "-":
-                        file_size = None
-                    else:
-                        file_size = human2bytes(sizestr.replace(" ", "").replace(",", ""))
+                    file_size = None if sizestr == "-" else human2bytes(sizestr.replace(" ", "").replace(",", ""))
                     line = line[match.end() :].lstrip()
                 if line:
                     file_desc = line.rstrip()
@@ -139,7 +149,7 @@ def parse(soup):
                     continue
                 for td in tr.find_all("td"):
                     if status >= len(heads):
-                        raise AssertionError("can't detect table column number")
+                        raise ColumnDetectionError
                     if td.get("colspan"):
                         continue
                     elif heads[status] == "name":
@@ -177,16 +187,15 @@ def parse(soup):
                         status += 1
                     elif heads[status] == "size":
                         sizestr = td.get_text().strip().replace(",", "")
-                        if sizestr == "-" or not sizestr:
-                            file_size = None
-                        elif td.get("data-sort-value"):
-                            file_size = int(td["data-sort-value"])
-                        else:
+                        file_size = human2bytes(match.group(0).replace(" ", "")) if match else None
+                        file_size = (
+                            int(td.get("data-sort-value"))
+                            if file_size is None and td.get("data-sort-value")
+                            else file_size
+                        )
+                        if file_size is None:
                             match = RE_FILESIZE.match(sizestr)
-                            if match:
-                                file_size = human2bytes(match.group(0).replace(" ", ""))
-                            else:
-                                file_size = None
+                            file_size = human2bytes(match.group(0).replace(" ", "")) if match else None
                         status += 1
                     elif heads[status] == "description":
                         file_desc = file_desc or "".join(map(str, td.children)).strip(" \t\n\r\x0b\x0c\xa0") or None
@@ -248,7 +257,7 @@ def fetch_listing(url, timeout=30, **requests_kwargs) -> tuple[str, list[FileEnt
 
     req = requests.get(url, timeout=timeout, **requests_kwargs)
     req.raise_for_status()
-    soup = bs4.BeautifulSoup(req.content, "html5lib")
+    soup = bs4.BeautifulSoup(req.content, "html.parser")
     return parse(soup)
 
 
@@ -263,12 +272,11 @@ def check_file_and_length(file_path: pathlib.Path, expected_length: int) -> bool
     """
     if not file_path.exists():
         return False
-    if expected_length is not None and file_path.stat().st_size != expected_length:
-        return False
-    return True
+
+    return expected_length is not None and file_path.stat().st_size == expected_length
 
 
-def download_to_directory(
+def download_to_directory(  # noqa: C901
     files: list[str],
     output_paths: list[pathlib.Path],
     *,
@@ -303,6 +311,7 @@ def download_to_directory(
             with requests.get(file_url, stream=True, timeout=timeout, **requests_kwargs) as r:
                 r.raise_for_status()
                 content_length = r.headers.get("Content-Length", 0)
+                _log.debug("Download %s to %s, bytes: %s", file_url, local_filename, content_length)
                 if check_file_and_length(local_filename, int(content_length)):
                     skipped_files.append((file_url, "Skipped (already exists)"))
                     continue
@@ -321,11 +330,11 @@ def download_to_directory(
                         file_pbar.close()
             downloaded_files.append(local_filename)
         except Exception as e:
-            print(f"Failed to download {file_url}: {e}")
+            _log.error("Failed to download %s: %s", file_url, str(e))
             skipped_files.append((file_url, str(e)))
     if skipped_files:
-        print("Skipped files:")
+        _log.warning("Some files were skipped or failed to download:")
         for file_url, reason in skipped_files:
-            print(f" - {file_url}: {reason}")
+            _log.warning(f" - {file_url}: {reason}")
 
     return downloaded_files

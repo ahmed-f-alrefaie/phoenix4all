@@ -6,11 +6,16 @@ import numpy as np
 from astropy import units as u
 from astropy.utils.data import download_file
 
-from .core import FilterType, InterpolationMode, PhoenixDataFile, PhoenixSource
+from phoenix4all.log import debug_function, module_logger
+
+from .core import FilterType, InterpolationMode, NoAvailableDataError, PhoenixDataFile, PhoenixSource
 
 BASE_URL = "https://archive.stsci.edu/hlsps/reference-atlases/cdbs/grid/phoenix/"
 
+_log = module_logger(__name__)
 
+
+@debug_function
 def get_catalogue(*, path: Optional[pathlib.Path] = None, base_url: Optional[str] = None) -> pathlib.Path:
     """Download the Phoenix model catalogue file if not already present locally.
 
@@ -20,6 +25,7 @@ def get_catalogue(*, path: Optional[pathlib.Path] = None, base_url: Optional[str
     Returns:
         The local file path to the downloaded catalogue file.
     """
+    _log.debug("get_catalogue called with path=%s, base_url=%s", path, base_url)
     if path:
         path = pathlib.Path(path)
         return path / "catalog.fits"
@@ -28,6 +34,7 @@ def get_catalogue(*, path: Optional[pathlib.Path] = None, base_url: Optional[str
     return pathlib.Path(local_path)
 
 
+@debug_function
 def load_catalogue_paths(catalogue_path: pathlib.Path) -> list[str]:
     """Load the catalogue file and return a list of file paths.
 
@@ -44,6 +51,7 @@ def load_catalogue_paths(catalogue_path: pathlib.Path) -> list[str]:
     return file_paths
 
 
+@debug_function
 def list_available_files(path: Optional[str] = None, base_url: Optional[str] = None) -> list:
     """List available Phoenix model files from the catalogue.
 
@@ -54,9 +62,11 @@ def list_available_files(path: Optional[str] = None, base_url: Optional[str] = N
     Returns:
         A list of filenames available in the Phoenix model catalogue.
     """
+    _log.debug("list_available_files called with path=%s, base_url=%s", path, base_url)
     path = pathlib.Path(path) if path else None
     base_url = base_url or BASE_URL
     catalog_path = get_catalogue(path=path, base_url=base_url)
+    _log.debug("Using catalogue at %s", catalog_path)
     from astropy.io import fits
 
     data_files = []
@@ -65,13 +75,14 @@ def list_available_files(path: Optional[str] = None, base_url: Optional[str] = N
         for d in data:
             properties = d[0]
             temperature, feh, logg = [float(p) for p in properties.split(",")]
+            _log.debug("Found model: Teff=%s, logg=%s, [Fe/H]=%s", temperature, logg, feh)
             filename = d[1][:-5]
-            if path:
-                filename = str(path / filename)
-            else:
-                filename = urllib.parse.urljoin(base_url, filename)
+            _log.debug("Filename: %s", filename)
+            filename = str(path / filename) if path else urllib.parse.urljoin(base_url, filename)
             data_files.append(PhoenixDataFile(teff=int(temperature), logg=logg, feh=feh, alpha=0.0, filename=filename))
-
+    ## Now if path is given we need to filter the files to only those that exist
+    if path:
+        data_files = [df for df in data_files if pathlib.Path(df.filename).exists()]
     return data_files
 
 
@@ -96,7 +107,7 @@ def load_file(dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
     local_path = pathlib.Path(local_path)
 
     if not local_path.exists():
-        raise FileNotFoundError(f"File {local_path} does not exist.")
+        raise FileNotFoundError(local_path)
 
     with fits.open(local_path) as hdul:
         columns = hdul[1].columns
@@ -126,6 +137,7 @@ def download_model(
     feh: FilterType,
     alpha: FilterType = 0.0,
     base_url: Optional[str] = None,
+    progress: bool = True,
 ) -> list[pathlib.Path]:
     """Download a specific Phoenix model file based on the given parameters.
 
@@ -148,7 +160,6 @@ def download_model(
     base_url = base_url or BASE_URL
     files = list_available_files(base_url=base_url)
     df = construct_phoenix_dataframe(files)
-    print(df.head())
     # Filter the DataFrame based on the provided parameters
     df = filter_parameter(df, "teff", teff)
     df = filter_parameter(df, "logg", logg)
@@ -163,7 +174,7 @@ def download_model(
     output_path_for_file.append(output_dir)
 
     if df.shape[0] == 0:
-        raise ValueError("No models found matching the specified parameters.")
+        raise NoAvailableDataError
     for _, row in df.iterrows():
         dataset = PhoenixDataFile(
             teff=row.name[0], logg=row.name[1], feh=row.name[2], alpha=row.name[3], filename=row["filename"]
@@ -181,10 +192,9 @@ def download_model(
         files_to_download.append(dataset.filename)
         output_path_for_file.append(local_dir)
 
-    print("Downloading files:", files_to_download)
-    print("To directories:", output_path_for_file)
+    _log.info("Downloading files:", files_to_download)
 
-    return download_to_directory(files_to_download, output_path_for_file, progress=True)
+    return download_to_directory(files_to_download, output_path_for_file, progress=progress)
 
     # phoenix.download_model(output_path=output_path, teff=dataset.teff, logg=dataset.logg,
     #                        feh=dataset.feh, alpha=dataset.alpha, base_url=base_url)
@@ -220,6 +230,14 @@ class SynphotSource(PhoenixSource):
 
         self.data_files = list_available_files(path=self.path, base_url=self.base_url)
 
+        self.boundaries_cache = self.boundaries()
+
+        # Use minimum temperature model to get wavelength grid
+        # Not sure if theres a more elegant way of doing it
+        self.wavelength_grid = self.spectrum(
+            teff=self.boundaries_cache["teff"][0], logg=0.0, feh=0.0, alpha=0.0, bounds_error=True
+        )[0]
+
     def metadata(self) -> dict:
         """Return metadata about the Phoenix source."""
         return {
@@ -227,6 +245,9 @@ class SynphotSource(PhoenixSource):
             "url_source": self.base_url,
             "reference": "Allard et al. 03, Allard et al. 07, Allard et al. 09",
         }
+
+    def spectral_grid(self):
+        return self.wavelength_grid
 
     def list_available_files(self) -> list[PhoenixDataFile]:
         """List available Phoenix model files."""
@@ -247,6 +268,7 @@ class SynphotSource(PhoenixSource):
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
         mkdir: bool = True,
+        progress: bool = True,
     ) -> list[pathlib.Path]:
         """Download specific Phoenix model files based on the given parameters.
 
@@ -262,7 +284,10 @@ class SynphotSource(PhoenixSource):
             mkdir: Whether to create the output directory if it does not exist (default is True).
 
         """
+        output_dir = pathlib.Path(output_dir)
         if mkdir and not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        return download_model(output_dir, teff=teff, logg=logg, feh=feh, alpha=alpha, base_url=base_url)
+        return download_model(
+            output_dir, teff=teff, logg=logg, feh=feh, alpha=alpha, base_url=base_url, progress=progress
+        )

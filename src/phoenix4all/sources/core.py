@@ -8,10 +8,28 @@ import numpy as np
 import pandas as pd
 from astropy import units as u
 
+from ..log import debug_function
+from ..radiative import planck
+
 
 class InterpolationMode(str, enum.Enum):
     NEAREST = "nearest"
     LINEAR = "linear"
+
+
+class UnknownInterpolationModeError(ValueError):
+    def __init__(self, mode: str):
+        super().__init__(f"Unknown interpolation mode: {mode}")
+
+
+class InterpolationBoundaryError(ValueError):
+    def __init__(self, param: str, value: float, bounds: tuple[float, float]):
+        super().__init__(f"Parameter {param} with value {value} is out of bounds {bounds}")
+
+
+class NoAvailableDataError(ValueError):
+    def __init__(self):
+        super().__init__("No available data found for the specified parameters.")
 
 
 @dataclass
@@ -37,6 +55,7 @@ DataFileLoader = Callable[[PhoenixDataFile], tuple[u.Quantity, u.Quantity]]
 FilterType = Optional[tuple[float, float] | float | u.Quantity | Literal["all"]]
 
 
+@debug_function
 def construct_phoenix_dataframe(datafile_list: list[PhoenixDataFile]) -> pd.DataFrame:
     """Construct a DataFrame from a list of PhoenixDataFile instances."""
 
@@ -46,6 +65,7 @@ def construct_phoenix_dataframe(datafile_list: list[PhoenixDataFile]) -> pd.Data
     return df
 
 
+@debug_function
 def find_nearest_points(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float = 0.0) -> pd.DataFrame:
     """Find the nearest grid points in the DataFrame to the specified parameters.
 
@@ -87,6 +107,7 @@ def find_nearest_points(df: pd.DataFrame, teff: int, logg: float, feh: float, al
     return df_a
 
 
+@debug_function
 def compute_weights(
     nearest_df: pd.DataFrame,
     teff: int,
@@ -124,12 +145,12 @@ def compute_weights(
     t_teff, t_logg, t_feh, t_alpha = t
 
     weights = {}
-    for idx, row in nearest_df.iterrows():
+    for idx, _ in nearest_df.iterrows():
         teff_i, logg_i, feh_i, alpha_i = idx
         i = teff_vals.index(teff_i)
         j = logg_vals.index(logg_i)
         k = feh_vals.index(feh_i)
-        l = alpha_vals.index(alpha_i)
+        l = alpha_vals.index(alpha_i)  # noqa: E741
 
         weight = (
             ((1 - t_teff) if i == 0 else t_teff if len(teff_vals) > 1 else 1)
@@ -152,6 +173,7 @@ def compute_weights(
     return weighted_datafile
 
 
+@debug_function
 def find_nearest_datafile(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float = 0.0) -> PhoenixDataFile:
     """Find the single nearest data file in the DataFrame to the specified parameters.
 
@@ -173,6 +195,7 @@ def find_nearest_datafile(df: pd.DataFrame, teff: int, logg: float, feh: float, 
     return PhoenixDataFile(teff=min_idx[0], logg=min_idx[1], feh=min_idx[2], alpha=min_idx[3], filename=row["filename"])
 
 
+@debug_function
 def compute_weighted_flux(
     weighted_data: list[WeightedPhoenixDataFile],
     file_loader: DataFileLoader,
@@ -218,6 +241,7 @@ def compute_weighted_flux(
         return wls[0], total_flux
 
 
+@debug_function
 def filter_parameter(df: pd.DataFrame, param: str, value: FilterType) -> pd.DataFrame:
     """Filter the DataFrame based on the given parameter and value.
 
@@ -234,6 +258,11 @@ def filter_parameter(df: pd.DataFrame, param: str, value: FilterType) -> pd.Data
         return df.loc[(df.index.get_level_values(param) >= value[0]) & (df.index.get_level_values(param) <= value[1])]
     else:
         return df.loc[df.index.get_level_values(param) == value]
+
+
+def test_boundaries(param: str, value: float, bounds: tuple[float, float]):
+    if value < bounds[0] or value > bounds[1]:
+        raise InterpolationBoundaryError(param, value, bounds)
 
 
 class PhoenixSource(abc.ABC):
@@ -261,11 +290,18 @@ class PhoenixSource(abc.ABC):
         """
         self.interpolation_mode = interpolation_mode
         if interpolation_mode not in InterpolationMode:
-            raise ValueError(f"Unknown interpolation mode: {interpolation_mode}")
+            raise UnknownInterpolationModeError(interpolation_mode)
 
         self.base_url = base_url
         self.model_name = model_name
         self.path = pathlib.Path(path) if path else None
+
+        self.boundaries_cache = None
+
+    @abc.abstractmethod
+    def spectral_grid(self) -> Optional[u.Quantity]:
+        """Return the wavelength grid if available."""
+        raise NotImplementedError
 
     def __init_subclass__(cls, **kwargs):
         from .registry import register_source as register
@@ -294,10 +330,22 @@ class PhoenixSource(abc.ABC):
         """Return metadata about the Phoenix source."""
         return {}
 
+    def boundaries(self):
+        teff = (9999999, -9999999)
+        logg = (9999999, -9999999)
+        feh = (9999999, -9999999)
+        alpha = (9999999, -9999999)
+        for datafile in self.list_available_files():
+            teff = (min(teff[0], datafile.teff), max(teff[1], datafile.teff))
+            logg = (min(logg[0], datafile.logg), max(logg[1], datafile.logg))
+            feh = (min(feh[0], datafile.feh), max(feh[1], datafile.feh))
+            alpha = (min(alpha[0], datafile.alpha), max(alpha[1], datafile.alpha))
+        return {"teff": teff, "logg": logg, "feh": feh, "alpha": alpha}
+
     @classmethod
-    def download_files(
+    def download_model(
         cls,
-        output_path: pathlib.Path,
+        output_dir: pathlib.Path,
         *,
         teff: FilterType,
         logg: FilterType,
@@ -306,10 +354,11 @@ class PhoenixSource(abc.ABC):
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
         mkdir: bool = True,
+        progress: bool = True,
     ) -> pathlib.Path:
-        """Download a specific Phoenix model file based on the given parameters.
+        """Download a Phoenix model given the specified parameters.
 
-        Parameters can be either a single value, a tuple specifying a range, or "all" to download all available models.
+        Parameters can be either a single value, a tuple specifying a range, or "all" to download all available files for a model.
 
         Args:
             output_path: Path to save the downloaded file.
@@ -356,26 +405,48 @@ class PhoenixSource(abc.ABC):
             feh: Metallicity.
             alpha: Alpha element enhancement (default is 0.0).
             bounds_error: If True, raise an error if the parameters are out of bounds. If False, clip to the nearest available model.
-            use_planck: If True, use a blackbody spectrum if the temperature is out of bounds.
+            use_planck: If True, use a blackbody spectrum if the temperature is out of bounds. Overrides bounds_error for temperature.
         Returns:
             A tuple of (wavelengths, flux) as astropy Quantities.
         """
+        boundaries = self.boundaries() if self.boundaries_cache is None else self.boundaries_cache
+        self.boundaries_cache = boundaries
+
+        # Temeperature check first
+        if teff < boundaries["teff"][0] or (teff > boundaries["teff"][1] and use_planck):
+            # We need to get a wavelength grid to return
+            # Replace this with a more appropriate wavelength grid if needed
+            # possibly based on the nearest model or loading it beforehand
+            wav = self.spectral_grid()
+
+            flux = planck(wav, teff << u.K)
+            return wav, flux
+
+        if bounds_error:
+            test_boundaries("teff", teff, boundaries["teff"])
+            test_boundaries("logg", logg, boundaries["logg"])
+            test_boundaries("feh", feh, boundaries["feh"])
+            test_boundaries("alpha", alpha, boundaries["alpha"])
+        else:
+            teff = np.clip(teff, boundaries["teff"][0], boundaries["teff"][1])
+            logg = np.clip(logg, boundaries["logg"][0], boundaries["logg"][1])
+            feh = np.clip(feh, boundaries["feh"][0], boundaries["feh"][1])
+            alpha = np.clip(alpha, boundaries["alpha"][0], boundaries["alpha"][1])
+
         df = construct_phoenix_dataframe(self.list_available_files())
         if self.interpolation_mode == InterpolationMode.NEAREST:
             nearest = find_nearest_points(df, teff=teff, logg=logg, feh=feh, alpha=alpha)
             if nearest.shape[0] == 0:
-                raise ValueError("No matching models found.")
+                raise NoAvailableDataError
             nearest_datafile = find_nearest_datafile(nearest, teff=teff, logg=logg, feh=feh, alpha=alpha)
             wl, flux = self.load_file(nearest_datafile)
             return wl, flux
         elif self.interpolation_mode == InterpolationMode.LINEAR:
             nearest = find_nearest_points(df, teff=teff, logg=logg, feh=feh, alpha=alpha)
             if nearest.shape[0] == 0:
-                raise ValueError("No matching models found.")
+                raise NoAvailableDataError
             weighted_datafiles = compute_weights(nearest, teff=teff, logg=logg, feh=feh, alpha=alpha)
-            if len(weighted_datafiles) == 0:
-                raise ValueError("No matching models found after weighting.")
             wl, flux = compute_weighted_flux(weighted_datafiles, self.load_file)
             return wl, flux
         else:
-            raise ValueError(f"Unknown interpolation mode: {self.interpolation_mode}")
+            raise UnknownInterpolationModeError(self.interpolation_mode)
