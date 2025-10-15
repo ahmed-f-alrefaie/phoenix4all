@@ -1,0 +1,52 @@
+site_name: phoenix4all
+repo_url: https://github.com/ahmed-f-alrefaie/phoenix4all
+site_url: https://ahmed-f-alrefaie.github.io/phoenix4all
+site_description: All in one library for loading and using phoenix spectra
+site_author: Ahmed Al-Refaie
+edit_uri: edit/main/docs/
+repo_name: ahmed-f-alrefaie/phoenix4all
+copyright: Maintained by <a href="https://ahmed-f-alrefaie.com">ahmed-f-alrefaie</a>.
+
+nav:
+  - Home: index.md
+  - Modules: modules.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["src/phoenix4all"]
+theme:
+  name: material
+  feature:
+    tabs: true
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ahmed-f-alrefaie/phoenix4all
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/phoenix4all
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
