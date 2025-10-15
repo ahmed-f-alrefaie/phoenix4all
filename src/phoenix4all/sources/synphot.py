@@ -1,30 +1,52 @@
-from astropy.utils.data import download_file
-from typing import Optional
-from .core import PhoenixDataFile, WeightedPhoenixDataFile
-import urllib.parse
 import pathlib
-from astropy import units as u
+import urllib.parse
+from typing import Optional
+
 import numpy as np
+from astropy import units as u
+from astropy.utils.data import download_file
+
+from .core import FilterType, InterpolationMode, PhoenixDataFile, PhoenixSource
 
 BASE_URL = "https://archive.stsci.edu/hlsps/reference-atlases/cdbs/grid/phoenix/"
 
-def get_catalogue(*,path: Optional[pathlib.Path] = None,
-                  base_url: Optional[str] = None) -> pathlib.Path:
+
+def get_catalogue(*, path: Optional[pathlib.Path] = None, base_url: Optional[str] = None) -> pathlib.Path:
     """Download the Phoenix model catalogue file if not already present locally.
-    
+
     Args:
         path: Optional local path to save the catalogue file. If None, downloads to a temporary location.
         base_url: Optional base URL to download the catalogue from. Defaults to the standard Phoenix STSCI model url.
     Returns:
         The local file path to the downloaded catalogue file.
     """
+    if path:
+        path = pathlib.Path(path)
+        return path / "catalog.fits"
     url = urllib.parse.urljoin(base_url or BASE_URL, "catalog.fits")
     local_path = download_file(url, cache=True) if path is None else path
     return pathlib.Path(local_path)
 
+
+def load_catalogue_paths(catalogue_path: pathlib.Path) -> list[str]:
+    """Load the catalogue file and return a list of file paths.
+
+    Args:
+        catalogue_path: Local path to the catalogue file.
+    Returns:
+        A list of file paths from the catalogue.
+    """
+    from astropy.io import fits
+
+    with fits.open(catalogue_path) as hdul:
+        data = hdul[1].data  # Assuming the data is in the first extension
+        file_paths = [d[1][:-5] for d in data]  # Remove [g] extension
+    return file_paths
+
+
 def list_available_files(path: Optional[str] = None, base_url: Optional[str] = None) -> list:
     """List available Phoenix model files from the catalogue.
-    
+
     Args:
         path: Optional local path where the catalogue file is stored. If None, downloads to a temporary location.
         base_url: Optional base URL to download the catalogue from. Defaults to the standard Phoenix STSCI model url.
@@ -36,6 +58,7 @@ def list_available_files(path: Optional[str] = None, base_url: Optional[str] = N
     base_url = base_url or BASE_URL
     catalog_path = get_catalogue(path=path, base_url=base_url)
     from astropy.io import fits
+
     data_files = []
     with fits.open(catalog_path) as hdul:
         data = hdul[1].data  # Assuming the data is in the first extension
@@ -48,12 +71,13 @@ def list_available_files(path: Optional[str] = None, base_url: Optional[str] = N
             else:
                 filename = urllib.parse.urljoin(base_url, filename)
             data_files.append(PhoenixDataFile(teff=int(temperature), logg=logg, feh=feh, alpha=0.0, filename=filename))
-            
+
     return data_files
+
 
 def load_file(dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
     """Load the content of a Phoenix model file.
-    
+
     Args:
         dataset: A PhoenixDataFile instance representing the model to load.
     Returns:
@@ -61,11 +85,18 @@ def load_file(dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
     """
     from astropy.io import fits
 
-    local_path = dataset.filename
-    if not pathlib.Path(local_path).exists():
+    from phoenix4all.net import is_remote_url
 
+    local_path = dataset.filename
+    # check if this is a local file or a URL
+
+    if is_remote_url(dataset.filename):
         local_path = download_file(dataset.filename, cache=True)
 
+    local_path = pathlib.Path(local_path)
+
+    if not local_path.exists():
+        raise FileNotFoundError(f"File {local_path} does not exist.")
 
     with fits.open(local_path) as hdul:
         columns = hdul[1].columns
@@ -73,27 +104,35 @@ def load_file(dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
         logg = int(dataset.logg * 10)
         # No alpha enhancement in this version
 
-        logg_index = columns.names.index(f'g{logg:02d}')
-        
+        logg_index = columns.names.index(f"g{logg:02d}")
 
-        data = np.array(hdul[1].data.copy()) # Assuming the data is in the first extension
+        data = np.array(hdul[1].data.copy())  # Assuming the data is in the first extension
 
         data_shape = data.shape[0]
-        data_view = data.view(">f8").reshape(data_shape ,-1)
-        wav = data_view[:,0]
-        flux = data_view[:,logg_index]
+        data_view = data.view(">f8").reshape(data_shape, -1)
+        wav = data_view[:, 0]
+        flux = data_view[:, logg_index]
 
     wav = np.array(wav) << u.AA
     flux = np.array(flux) << (u.erg / (u.s * u.cm**2 * u.AA))
     return wav, flux
 
-def download_model(output_path: pathlib.Path, *, teff: int, logg: float, feh: float, alpha: float=0.0,
-                   base_url: Optional[str] = None,
-                   create_folder: bool = False) -> pathlib.Path:
+
+def download_model(
+    output_dir: pathlib.Path,
+    *,
+    teff: FilterType,
+    logg: FilterType,
+    feh: FilterType,
+    alpha: FilterType = 0.0,
+    base_url: Optional[str] = None,
+) -> list[pathlib.Path]:
     """Download a specific Phoenix model file based on the given parameters.
-    
+
+    Will mirror the directory structure of the Synphot models.
+
     Args:
-        output_path: Local path to save the downloaded model file.
+        output_dir: Local path to save the downloaded model file.
         teff: Effective temperature of the desired model.
         logg: Surface gravity of the desired model.
         feh: Metallicity of the desired model.
@@ -102,10 +141,128 @@ def download_model(output_path: pathlib.Path, *, teff: int, logg: float, feh: fl
     Returns:
         The local file path to the downloaded model file.
     """
+    from ..net.http import download_to_directory
+    from .core import construct_phoenix_dataframe, filter_parameter
+
+    output_dir = pathlib.Path(output_dir)
     base_url = base_url or BASE_URL
     files = list_available_files(base_url=base_url)
+    df = construct_phoenix_dataframe(files)
+    print(df.head())
+    # Filter the DataFrame based on the provided parameters
+    df = filter_parameter(df, "teff", teff)
+    df = filter_parameter(df, "logg", logg)
+    df = filter_parameter(df, "feh", feh)
+    df = filter_parameter(df, "alpha", alpha)
+
+    files_to_download = []
+    output_path_for_file = []
+
+    # Add catalogue file
+    files_to_download.append(urllib.parse.urljoin(base_url, "catalog.fits"))
+    output_path_for_file.append(output_dir)
+
+    if df.shape[0] == 0:
+        raise ValueError("No models found matching the specified parameters.")
+    for _, row in df.iterrows():
+        dataset = PhoenixDataFile(
+            teff=row.name[0], logg=row.name[1], feh=row.name[2], alpha=row.name[3], filename=row["filename"]
+        )
+        # Local path to save the file
+        # Remove base_url from filename to get relative path
+        relative_path = dataset.filename
+        if relative_path.startswith(base_url):
+            relative_path = relative_path[len(base_url) :]
+        local_path = output_dir / relative_path
+        # Now we dont need the filename att the end so just the directory to put it in
+        # Remove the filename from the path
+        local_dir = local_path.parent
+
+        files_to_download.append(dataset.filename)
+        output_path_for_file.append(local_dir)
+
+    print("Downloading files:", files_to_download)
+    print("To directories:", output_path_for_file)
+
+    return download_to_directory(files_to_download, output_path_for_file, progress=True)
+
+    # phoenix.download_model(output_path=output_path, teff=dataset.teff, logg=dataset.logg,
+    #                        feh=dataset.feh, alpha=dataset.alpha, base_url=base_url)
 
 
+class SynphotSource(PhoenixSource):
+    """Concrete implementation of PhoenixSource for Synphot models."""
 
+    KEY: str = "synphot"
 
+    def __init__(
+        self,
+        *,
+        path: Optional[pathlib.Path] = None,
+        interpolation_mode: InterpolationMode = "linear",
+        base_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> None:
+        """Initialize the SynphotSource.
 
+        Will
+
+        Args:
+            path: Optional local path where the catalogue file is stored. If None, downloads to a temporary location.
+            base_url: Optional base URL to download the catalogue from. Defaults to the standard Phoenix STSCI model url.
+            model_name: Optional model name to filter the catalogue files. If None, uses all available models.
+            interpolation_mode: Interpolation mode to use. Options are "linear", "nearest"
+
+        Raises:
+            ValueError: If an unknown interpolation mode is provided.
+        """
+        super().__init__(path=path, interpolation_mode=interpolation_mode, base_url=base_url, model_name=model_name)
+
+        self.data_files = list_available_files(path=self.path, base_url=self.base_url)
+
+    def metadata(self) -> dict:
+        """Return metadata about the Phoenix source."""
+        return {
+            "source": "Synphot",
+            "url_source": self.base_url,
+            "reference": "Allard et al. 03, Allard et al. 07, Allard et al. 09",
+        }
+
+    def list_available_files(self) -> list[PhoenixDataFile]:
+        """List available Phoenix model files."""
+        return self.data_files
+
+    def load_file(self, dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
+        return load_file(dataset)
+
+    @classmethod
+    def download_model(
+        cls,
+        output_dir: pathlib.Path,
+        *,
+        teff: FilterType,
+        logg: FilterType,
+        feh: FilterType,
+        alpha: FilterType = 0.0,
+        base_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+        mkdir: bool = True,
+    ) -> list[pathlib.Path]:
+        """Download specific Phoenix model files based on the given parameters.
+
+        Will mirror the directory structure of the Synphot models.
+
+        Args:
+            output_dir: Local path to save the downloaded model files.
+            teff: Effective temperature(s) of the desired model(s).
+            logg: Surface gravity(ies) of the desired model(s).
+            feh: Metallicity(ies) of the desired model(s).
+            alpha: Alpha element enhancement(s) of the desired model(s) (default is 0.0).
+            base_url: Optional base URL to download the catalogue from. Defaults to the standard Phoenix STSCI model url.
+            mkdir: Whether to create the output directory if it does not exist (default is True).
+
+        """
+        if mkdir and not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        return download_model(output_dir, teff=teff, logg=logg, feh=feh, alpha=alpha, base_url=base_url)

@@ -1,6 +1,7 @@
-from phoenix4all.sources.hiresfits import parse_filename
 import pytest
+
 from phoenix4all.sources.core import PhoenixDataFile
+from phoenix4all.sources.hiresfits import parse_filename
 
 # lte12000-2.00-0.5.Alpha=+0.60.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
 # lte06300-1.50-1.5.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits
@@ -38,13 +39,13 @@ from phoenix4all.sources.core import PhoenixDataFile
     "filename, expected",
     [
         (
-            "lte12000-2.00-0.5.Alpha=+0.60.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits",
+            "hello/lte12000-2.00-0.5.Alpha=+0.60.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits",
             PhoenixDataFile(
                 teff=12000,
                 logg=2.0,
                 feh=-0.5,
                 alpha=0.6,
-                filename="lte12000-2.00-0.5.Alpha=+0.60.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits",
+                filename="hello/lte12000-2.00-0.5.Alpha=+0.60.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits",
             ),
         ),
         (

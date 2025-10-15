@@ -20,9 +20,11 @@ classifiers = [
 dependencies = [
     "astropy>=6.0.1",
     "beautifulsoup4>=4.14.2",
+    "click>=8.1.8",
     "html5lib>=1.1",
     "numpy>=1.26.4",
     "pandas>=2.3.3",
+    "requests>=2.32.5",
     "tqdm>=4.67.1",
 ]
 
@@ -125,4 +127,3 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
-

@@ -1,39 +1,54 @@
-from dataclasses import dataclass, asdict
-from typing import Optional,Callable
-import pandas as pd
+import abc
+import enum
+import pathlib
+from dataclasses import asdict, dataclass
+from typing import Callable, Literal, Optional
+
 import numpy as np
+import pandas as pd
 from astropy import units as u
 
+
+class InterpolationMode(str, enum.Enum):
+    NEAREST = "nearest"
+    LINEAR = "linear"
 
 
 @dataclass
 class PhoenixDataFile:
     """Class representing a Phoenix model data file with its parameters."""
+
     teff: int
     logg: float
     feh: float
     filename: str
     alpha: float
 
+
 @dataclass
 class WeightedPhoenixDataFile(PhoenixDataFile):
     """Class representing a Phoenix model data file with its parameters and interpolation weight."""
+
     weight: float
 
 
 DataFileLoader = Callable[[PhoenixDataFile], tuple[u.Quantity, u.Quantity]]
+
+FilterType = Optional[tuple[float, float] | float | u.Quantity | Literal["all"]]
+
 
 def construct_phoenix_dataframe(datafile_list: list[PhoenixDataFile]) -> pd.DataFrame:
     """Construct a DataFrame from a list of PhoenixDataFile instances."""
 
     serialised_data = [asdict(datafile) for datafile in datafile_list]
     df = pd.DataFrame(serialised_data)
-    df.set_index(['teff', 'logg', 'feh', 'alpha'], inplace=True)
+    df.set_index(["teff", "logg", "feh", "alpha"], inplace=True)
     return df
 
-def find_nearest_points(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float=0.0) -> pd.DataFrame:
+
+def find_nearest_points(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float = 0.0) -> pd.DataFrame:
     """Find the nearest grid points in the DataFrame to the specified parameters.
-    
+
     Args:
         df: DataFrame with MultiIndex (teff, logg, feh, alpha) and a 'filename' column.
         teff: Effective temperature to match.
@@ -42,40 +57,45 @@ def find_nearest_points(df: pd.DataFrame, teff: int, logg: float, feh: float, al
         alpha: Alpha element enhancement to match (default is 0.0).
     Returns:
         DataFrame with the nearest grid points and their filenames.
-    
+
     """
     # Since there will be multiple temperatures, we will progressively filter the DataFrame
 
-    tvalues = df.index.get_level_values('teff').unique()
+    tvalues = df.index.get_level_values("teff").unique()
     tclosest = tvalues[np.abs(tvalues - teff).argsort()[:2]]  # Get two closest temperatures
     if np.any(tclosest == teff):
         tclosest = np.array([teff])  # If exact match, only keep that
-    df_t = df.loc[df.index.get_level_values('teff').isin(tclosest)]
+    df_t = df.loc[df.index.get_level_values("teff").isin(tclosest)]
     # Now filter by logg
-    gvalues = df_t.index.get_level_values('logg').unique()
+    gvalues = df_t.index.get_level_values("logg").unique()
     gclosest = gvalues[np.abs(gvalues - logg).argsort()[:2]]  # Get two closest logg values
     if np.any(gclosest == logg):
         gclosest = np.array([logg])  # If exact match, only keep that
-    df_g = df_t.loc[df_t.index.get_level_values('logg').isin(gclosest)]
+    df_g = df_t.loc[df_t.index.get_level_values("logg").isin(gclosest)]
     # Now filter by feh
-    fvalues = df_g.index.get_level_values('feh').unique()
+    fvalues = df_g.index.get_level_values("feh").unique()
     fclosest = fvalues[np.abs(fvalues - feh).argsort()[:2]]  # Get two closest feh values
     if np.any(fclosest == feh):
         fclosest = np.array([feh])  # If exact match, only keep that
-    df_f = df_g.loc[df_g.index.get_level_values('feh').isin(fclosest)]
+    df_f = df_g.loc[df_g.index.get_level_values("feh").isin(fclosest)]
     # Finally filter by alpha
-    avals = df_f.index.get_level_values('alpha').unique()
+    avals = df_f.index.get_level_values("alpha").unique()
     aclosest = avals[np.abs(avals - alpha).argsort()[:2]]  # Get two closest alpha values
     if np.any(aclosest == alpha):
         aclosest = np.array([alpha])  # If exact match, only keep that
-    df_a = df_f.loc[df_f.index.get_level_values('alpha').isin(aclosest)]
+    df_a = df_f.loc[df_f.index.get_level_values("alpha").isin(aclosest)]
     return df_a
 
 
-def compute_weights(nearest_df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float=0.0,
-                ) -> list[WeightedPhoenixDataFile]:
+def compute_weights(
+    nearest_df: pd.DataFrame,
+    teff: int,
+    logg: float,
+    feh: float,
+    alpha: float = 0.0,
+) -> list[WeightedPhoenixDataFile]:
     """Compute interpolation weights for the nearest grid points and attach to the DataFrame.
-    
+
     Args:
         nearest_df: DataFrame with the nearest grid points and their filenames.
         teff: Effective temperature to match.
@@ -86,10 +106,10 @@ def compute_weights(nearest_df: pd.DataFrame, teff: int, logg: float, feh: float
         Dataframe with an additional 'weight' column for interpolation.
     """
     # Extract the unique values for each parameter
-    teff_vals = sorted(nearest_df.index.get_level_values('teff').unique())
-    logg_vals = sorted(nearest_df.index.get_level_values('logg').unique())
-    feh_vals = sorted(nearest_df.index.get_level_values('feh').unique())
-    alpha_vals = sorted(nearest_df.index.get_level_values('alpha').unique())
+    teff_vals = sorted(nearest_df.index.get_level_values("teff").unique())
+    logg_vals = sorted(nearest_df.index.get_level_values("logg").unique())
+    feh_vals = sorted(nearest_df.index.get_level_values("feh").unique())
+    alpha_vals = sorted(nearest_df.index.get_level_values("alpha").unique())
 
     target_point = [teff, logg, feh, alpha]
 
@@ -112,30 +132,29 @@ def compute_weights(nearest_df: pd.DataFrame, teff: int, logg: float, feh: float
         l = alpha_vals.index(alpha_i)
 
         weight = (
-            (1 - t_teff) if i == 0 else t_teff if len(teff_vals) > 1 else 1 
-        ) * (
-            (1 - t_logg) if j == 0 else t_logg if len(logg_vals) > 1 else 1 
-        ) * (
-            (1 - t_feh) if k == 0 else t_feh if len(feh_vals) > 1 else 1 
-        ) * (
-            (1 - t_alpha) if l == 0 else t_alpha if len(alpha_vals) > 1 else 1 
+            ((1 - t_teff) if i == 0 else t_teff if len(teff_vals) > 1 else 1)
+            * ((1 - t_logg) if j == 0 else t_logg if len(logg_vals) > 1 else 1)
+            * ((1 - t_feh) if k == 0 else t_feh if len(feh_vals) > 1 else 1)
+            * ((1 - t_alpha) if l == 0 else t_alpha if len(alpha_vals) > 1 else 1)
         )
         weights[idx] = weight
 
     nearest_df = nearest_df.copy()
     weighted_datafile = []
-    nearest_df['weight'] = pd.Series(weights)
+    nearest_df["weight"] = pd.Series(weights)
     for idx, row in nearest_df.iterrows():
         if row["weight"] > 0:
-            weighted_datafile.append(WeightedPhoenixDataFile(
-                teff=idx[0], logg=idx[1], feh=idx[2], alpha=idx[3],
-                filename=row['filename'], weight=row['weight']
-            ))
+            weighted_datafile.append(
+                WeightedPhoenixDataFile(
+                    teff=idx[0], logg=idx[1], feh=idx[2], alpha=idx[3], filename=row["filename"], weight=row["weight"]
+                )
+            )
     return weighted_datafile
 
-def find_nearest_datafile(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float=0.0) -> PhoenixDataFile:
+
+def find_nearest_datafile(df: pd.DataFrame, teff: int, logg: float, feh: float, alpha: float = 0.0) -> PhoenixDataFile:
     """Find the single nearest data file in the DataFrame to the specified parameters.
-    
+
     Args:
         df: DataFrame with MultiIndex (teff, logg, feh, alpha) and a 'filename' column.
         teff: Effective temperature to match.
@@ -147,45 +166,39 @@ def find_nearest_datafile(df: pd.DataFrame, teff: int, logg: float, feh: float, 
     """
     # Compute the distance to each point in the DataFrame
     distances = np.sqrt(
-        (df["teff"] - teff) ** 2 +
-        (df["logg"] - logg) ** 2 +
-        (df["feh"] - feh) ** 2 +
-        (df["alpha"] - alpha) ** 2
+        (df["teff"] - teff) ** 2 + (df["logg"] - logg) ** 2 + (df["feh"] - feh) ** 2 + (df["alpha"] - alpha) ** 2
     )
     min_idx = distances.idxmin()
     row = df.loc[min_idx]
-    return PhoenixDataFile(
-        teff=min_idx[0], logg=min_idx[1], feh=min_idx[2], alpha=min_idx[3],
-        filename=row['filename']
-    )
+    return PhoenixDataFile(teff=min_idx[0], logg=min_idx[1], feh=min_idx[2], alpha=min_idx[3], filename=row["filename"])
+
 
 def compute_weighted_flux(
-        weighted_data: list[WeightedPhoenixDataFile],
-        file_loader: DataFileLoader,
-        *,
-        wavelength_grid: Optional[u.Quantity] = None
+    weighted_data: list[WeightedPhoenixDataFile],
+    file_loader: DataFileLoader,
+    *,
+    wavelength_grid: Optional[u.Quantity] = None,
 ) -> tuple[u.Quantity, u.Quantity]:
     """Compute the weighted flux from a list of WeightedPhoenixDataFile instances.
-    
+
     Args:
         weighted_data: List of WeightedPhoenixDataFile instances with weights and filenames.
     Returns:
         A tuple of (wavelengths, weighted_flux) as astropy Quantities.
     """
-    fluxes=[]
+    fluxes = []
     wls = []
 
     for data in weighted_data:
         wl, flux = file_loader(data)
 
         wls.append(wl)
-        fluxes.append(flux*data.weight)
-    
+        fluxes.append(flux * data.weight)
+
     perform_interpolation = wavelength_grid is not None
     # Check that all wavelength arrays are the same
     if not perform_interpolation:
         for wl in wls[1:]:
-
             if not np.array_equal(wl, wls[0]):
                 smallest_wl = np.argmin([len(w) for w in wls])
                 wavelength_grid = wls[smallest_wl]
@@ -203,4 +216,166 @@ def compute_weighted_flux(
     else:
         total_flux = sum(fluxes)
         return wls[0], total_flux
-    
+
+
+def filter_parameter(df: pd.DataFrame, param: str, value: FilterType) -> pd.DataFrame:
+    """Filter the DataFrame based on the given parameter and value.
+
+    Args:
+        df: DataFrame with MultiIndex (teff, logg, feh, alpha) and a 'filename' column.
+        param: Parameter to filter by ('teff', 'logg', 'feh', 'alpha').
+        value: Value to filter by. Can be a single value, a tuple specifying a range, or "all".
+    Returns:
+        Filtered DataFrame.
+    """
+    if value == "all" or value is None:
+        return df
+    elif isinstance(value, (tuple, list, np.ndarray)) and len(value) == 2:
+        return df.loc[(df.index.get_level_values(param) >= value[0]) & (df.index.get_level_values(param) <= value[1])]
+    else:
+        return df.loc[df.index.get_level_values(param) == value]
+
+
+class PhoenixSource(abc.ABC):
+    """Abstract base class for Phoenix model sources."""
+
+    KEY: str = "ignore"
+
+    def __init__(
+        self,
+        path: Optional[pathlib.Path] = None,
+        interpolation_mode: InterpolationMode = "linear",
+        base_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> None:
+        """Initialize the Phoenix source.
+
+        Args:
+            path: Local path to the model files. If None, models will be downloaded as needed.
+            interpolation_mode: Interpolation mode to use ("nearest" or "linear").
+            base_url: Optional base URL to download the models from. Defaults to the standard Phoenix STSCI model url.
+            model_name: Optional model name to use in the URL if needed.
+        Raises:
+            ValueError: If an unknown interpolation mode is provided.
+
+        """
+        self.interpolation_mode = interpolation_mode
+        if interpolation_mode not in InterpolationMode:
+            raise ValueError(f"Unknown interpolation mode: {interpolation_mode}")
+
+        self.base_url = base_url
+        self.model_name = model_name
+        self.path = pathlib.Path(path) if path else None
+
+    def __init_subclass__(cls, **kwargs):
+        from .registry import register_source as register
+
+        super().__init_subclass__(**kwargs)
+        if cls.KEY == "ignore":
+            return  # Do not register the base class
+
+        register(cls.KEY, cls)
+
+    @classmethod
+    def validate_datafile(cls, directory: pathlib.Path) -> list[bool]:
+        """Validate if the file format is correct for this source.
+
+        Given a directory, will check if the files in the directory match the expected format for this source.
+
+        Args:
+            directory: Path to the directory containing the model files.
+
+        Returns:
+            A list of booleans indicating whether each file is valid for this source.
+        """
+        raise NotImplementedError
+
+    def metadata(self) -> dict:
+        """Return metadata about the Phoenix source."""
+        return {}
+
+    @classmethod
+    def download_files(
+        cls,
+        output_path: pathlib.Path,
+        *,
+        teff: FilterType,
+        logg: FilterType,
+        feh: FilterType,
+        alpha: FilterType = 0.0,
+        base_url: Optional[str] = None,
+        model_name: Optional[str] = None,
+        mkdir: bool = True,
+    ) -> pathlib.Path:
+        """Download a specific Phoenix model file based on the given parameters.
+
+        Parameters can be either a single value, a tuple specifying a range, or "all" to download all available models.
+
+        Args:
+            output_path: Path to save the downloaded file.
+            teff: Effective temperature range/value of the desired model.
+            logg: Surface gravity range/value of the desired model.
+            feh: Metallicity range/value of the desired model.
+            alpha: Alpha element enhancement range/value of the desired model (default is 0.0).
+            base_url: Optional base URL to download the model from. Defaults to the standard Phoenix STSCI model url.
+        Returns:
+            Path to the downloaded file.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def list_available_files(self) -> list[PhoenixDataFile]:
+        """List available Phoenix model files."""
+        pass
+
+    @abc.abstractmethod
+    def load_file(self, dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
+        """Load the content of a Phoenix model file.
+
+        Args:
+            dataset: A PhoenixDataFile instance representing the model to load.
+        Returns:
+            The content of the model file as a string.
+        """
+        pass
+
+    def spectrum(
+        self,
+        teff: int,
+        logg: Optional[float] = 0.0,
+        feh: Optional[float] = 0.0,
+        alpha: float = 0.0,
+        bounds_error: bool = True,
+        use_planck: bool = False,
+    ):
+        """Get the spectrum for the specified parameters.
+
+        Args:
+            teff: Effective temperature.
+            logg: Surface gravity.
+            feh: Metallicity.
+            alpha: Alpha element enhancement (default is 0.0).
+            bounds_error: If True, raise an error if the parameters are out of bounds. If False, clip to the nearest available model.
+            use_planck: If True, use a blackbody spectrum if the temperature is out of bounds.
+        Returns:
+            A tuple of (wavelengths, flux) as astropy Quantities.
+        """
+        df = construct_phoenix_dataframe(self.list_available_files())
+        if self.interpolation_mode == InterpolationMode.NEAREST:
+            nearest = find_nearest_points(df, teff=teff, logg=logg, feh=feh, alpha=alpha)
+            if nearest.shape[0] == 0:
+                raise ValueError("No matching models found.")
+            nearest_datafile = find_nearest_datafile(nearest, teff=teff, logg=logg, feh=feh, alpha=alpha)
+            wl, flux = self.load_file(nearest_datafile)
+            return wl, flux
+        elif self.interpolation_mode == InterpolationMode.LINEAR:
+            nearest = find_nearest_points(df, teff=teff, logg=logg, feh=feh, alpha=alpha)
+            if nearest.shape[0] == 0:
+                raise ValueError("No matching models found.")
+            weighted_datafiles = compute_weights(nearest, teff=teff, logg=logg, feh=feh, alpha=alpha)
+            if len(weighted_datafiles) == 0:
+                raise ValueError("No matching models found after weighting.")
+            wl, flux = compute_weighted_flux(weighted_datafiles, self.load_file)
+            return wl, flux
+        else:
+            raise ValueError(f"Unknown interpolation mode: {self.interpolation_mode}")
