@@ -283,6 +283,7 @@ def download_to_directory(  # noqa: C901
     timeout: int = 30,
     chunk_size: int = 8192,
     progress: bool = False,
+    includes_filename: bool = True,
     **requests_kwargs,
 ) -> list[pathlib.Path]:
     """Download a list of files to a specified directory.
@@ -292,6 +293,8 @@ def download_to_directory(  # noqa: C901
         output_directory: The directory where files will be saved.
         timeout: Timeout for the requests in seconds.
         chunk_size: Size of chunks to read at a time.
+        progress: Whether to show a progress bar.
+        includes_filename: Whether the output_directory includes the filename.
         requests_kwargs: Additional keyword arguments to pass to requests.get().
     Returns:
         A list of pathlib.Path objects representing the downloaded files.
@@ -300,13 +303,13 @@ def download_to_directory(  # noqa: C901
     from tqdm.auto import tqdm
 
     for output_path in output_paths:
-        output_path.mkdir(parents=True, exist_ok=True)
+        output_path.mkdir(parents=True, exist_ok=True) if not includes_filename else output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    files = tqdm(zip(files, output_paths), desc="Downloading files", total=len(files)) if progress else files
+    files = tqdm(zip(files, output_paths), desc="Downloading files", total=len(files)) if progress else zip(files, output_paths)
     downloaded_files = []
     skipped_files = []
     for file_url, output_path in files:
-        local_filename = output_path / os.path.basename(urllib.parse.urlparse(file_url).path)
+        local_filename = output_path / os.path.basename(urllib.parse.urlparse(file_url).path) if not includes_filename else output_path
         try:
             with requests.get(file_url, stream=True, timeout=timeout, **requests_kwargs) as r:
                 r.raise_for_status()

@@ -3,7 +3,7 @@ from typing import Optional
 
 from astropy import units as u
 
-from .sources import HiResFitsSource, InterpolationMode, SynphotSource, find_source
+from .sources import HiResFitsSource, InterpolationMode, SynphotSource, find_source, SVOSource
 
 
 def get_spectrum(
@@ -60,4 +60,4 @@ def get_spectrum(
     )
 
 
-__all__ = ["HiResFitsSource", "InterpolationMode", "SynphotSource", "get_spectrum"]
+__all__ = ["HiResFitsSource", "InterpolationMode", "SynphotSource", "get_spectrum", "SVOSource", "find_source"]

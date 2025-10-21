@@ -31,7 +31,7 @@ def load_directory_from_cache():
 
     from ..io import json_unzip
 
-    with ires.open_text("phoenix4all.cache", "hiresfit_cache.jsonz") as f:
+    with ires.open_text("phoenix4all.cache.hiresfits", "hiresfit_cache.jsonz") as f:
         result = json_unzip(json.load(f))
 
     return [PhoenixDataFile(**r) for r in result]
@@ -113,7 +113,7 @@ def load_wavelength_grid(path: Optional[str] = None, url: Optional[str] = None) 
     local_path = pathlib.Path(path) if path else None
     local_path = local_path / "WAVE_{BASE_MODEL}.fits" if local_path else None
     url = url or urllib.parse.urljoin(BASE_URL, f"WAVE_{BASE_MODEL}.fits")
-    local_path = download_file(url, cache=True) if local_path is None else local_path
+    local_path = download_file(url,pkgname="phoenix4all", cache=True) if local_path is None else local_path
     from astropy.io import fits
 
     with fits.open(local_path) as hdul:
@@ -176,7 +176,7 @@ def load_file(dataset: PhoenixDataFile, wavelength_grid: u.Quantity) -> tuple[u.
 
     local_path = dataset.filename
     if not pathlib.Path(local_path).exists():
-        local_path = download_file(dataset.filename, cache=True)
+        local_path = download_file(dataset.filename,pkgname="phoenix4all", cache=True)
 
     wav = wavelength_grid
 
@@ -306,6 +306,11 @@ class HiResFitsSource(PhoenixSource):
             "url_source": self.base_url,
             "reference": "arXiv:1303.5632",
         }
+
+    @classmethod
+    def available_models(cls) -> list[str]:
+        """Return a list of available model names for this source."""
+        return ["PHOENIX-ACES-AGSS-COND-2011"]
 
     def spectral_grid(self):
         return self.wavelength_grid

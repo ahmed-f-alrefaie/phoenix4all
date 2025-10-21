@@ -30,7 +30,7 @@ def get_catalogue(*, path: Optional[pathlib.Path] = None, base_url: Optional[str
         path = pathlib.Path(path)
         return path / "catalog.fits"
     url = urllib.parse.urljoin(base_url or BASE_URL, "catalog.fits")
-    local_path = download_file(url, cache=True) if path is None else path
+    local_path = download_file(url,pkgname="phoenix4all", cache=True) if path is None else path
     return pathlib.Path(local_path)
 
 
@@ -102,7 +102,7 @@ def load_file(dataset: PhoenixDataFile) -> tuple[u.Quantity, u.Quantity]:
     # check if this is a local file or a URL
 
     if is_remote_url(dataset.filename):
-        local_path = download_file(dataset.filename, cache=True)
+        local_path = download_file(dataset.filename,pkgname="phoenix4all", cache=True)
 
     local_path = pathlib.Path(local_path)
 
@@ -193,7 +193,8 @@ def download_model(
         output_path_for_file.append(local_dir)
 
     _log.info("Downloading files:", files_to_download)
-
+    print(files_to_download)
+    print(output_path_for_file)
     return download_to_directory(files_to_download, output_path_for_file, progress=progress)
 
     # phoenix.download_model(output_path=output_path, teff=dataset.teff, logg=dataset.logg,
@@ -237,6 +238,12 @@ class SynphotSource(PhoenixSource):
         self.wavelength_grid = self.spectrum(
             teff=self.boundaries_cache["teff"][0], logg=0.0, feh=0.0, alpha=0.0, bounds_error=True
         )[0]
+
+    @classmethod
+    def available_models(cls) -> list[str]:
+        """Return a list of available model names for this source."""
+        return ["agss2009"]
+
 
     def metadata(self) -> dict:
         """Return metadata about the Phoenix source."""
