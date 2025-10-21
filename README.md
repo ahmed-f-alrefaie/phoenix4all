@@ -81,6 +81,13 @@ wavelength, flux = get_spectrum(
 print(wavelength, flux)
 ```
 
+If you want to see what models are available from a source, you can do this:
+
+```python
+from phoenix4all import SVOSource
+print(SVOSource.available_models())
+```
+
 ## Being less lazy
 
 You can work directly with the sources if you want more control:
@@ -146,7 +153,7 @@ Which will give you:
   --help                          Show this message and exit.
 ```
 
-Lets choose the classic BT-Settl model from the SVO source and download all models with effective temperatures between 5000K and 6000K, surface gravities between 0 and 2, metallicity [Fe/H] of 0.0, and alpha element enhancement [alpha/Fe] of 0.0:
+Lets choose the classic **BT-Settl** model from the SVO source and download all models with effective temperatures between 5000K and 6000K, surface gravities between 0 and 2, metallicity [Fe/H] of 0.0, and alpha element enhancement [alpha/Fe] of 0.0:
 
 ```bash
 python -m phoenix4all.downloader svo /path/to/download/models --model bt-settl --teff-range 5000 6000 --logg-range 0 2 --feh 0.0 --alpha 0.0 --mkdir --progress
